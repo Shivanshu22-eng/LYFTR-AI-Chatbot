@@ -23,3 +23,11 @@ services:
         value: "true"
       - key: LITELLM_LOCAL_MODEL_COST_MAP
         value: "True"
+      # Authentication
+      - key: JWT_SECRET_KEY
+        sync: false
+      # Admin bootstrap (set in Render dashboard — never commit values)
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

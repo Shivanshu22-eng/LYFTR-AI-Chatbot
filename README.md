@@ -1,6 +1,6 @@
-# LYFTR AI — Full-Stack Agricultural AI Assistant
+# LYFTR AI — Full-Stack AI & Agricultural Assistant
 
-A production-grade full-stack AI application powered by **React + Vite**, **FastAPI**, **SQLite**, and **LiteLLM** with Gemini multimodal inference, multi-key failover, response caching, live weather, crop recommendations, and per-response observability.
+A production-grade full-stack AI application powered by **React + Vite**, **FastAPI**, **SQLite**, **LiteLLM** (Gemini), **Open-Meteo**, and **Pollinations.ai** (`flux`) with JWT authentication, role-based access control, administrator dashboard, content moderation, and per-response observability.
 
 **Live URLs**
 - **Frontend**: https://frontend-nu-jade-29.vercel.app/
@@ -18,32 +18,46 @@ A production-grade full-stack AI application powered by **React + Vite**, **Fast
 - Per-message metadata: `source`, `model`, `latency_ms`, `input_tokens`, `output_tokens`, `key_id`, `fallback_attempts`
 - Key redaction — raw API keys never appear in logs, responses, or errors
 
+### AI Image Generation Studio
+- Natural-language image generation powered by **Pollinations.ai** (`flux` model)
+- **10 Artistic Styles**: Photorealistic, Cinematic, Anime, Digital Art, 3D Rendering, Illustration, Watercolor, Fantasy, Architecture, Product Photography
+- **5 Aspect Ratios**: `1:1`, `16:9`, `9:16`, `4:3`, `3:2`
+- **1–4 Variations** per request, image previews, direct downloads, and regeneration
+- Per-user generation history stored in SQLite (`image_generations`) without storing binary image blobs
+
+### Authentication & Role-Based Access Control (RBAC)
+- User registration (`POST /auth/register`) and login (`POST /auth/login`) with **PBKDF2-HMAC-SHA256** password hashing (260,000 iterations) and **HS256 JWT** tokens
+- Three roles: `user`, `authorized_creator`, `admin`
+- Public registration always assigns `user` role; initial admin is bootstrapped strictly via `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables
+- Users cannot escalate or change their own roles; admins cannot demote themselves
+
+### Administrator Dashboard & Content Moderation
+- Global image-generation enable/disable switch (`PATCH /admin/settings/image-generation`)
+- User management: promote/demote roles, suspend/activate accounts, set per-user daily generation limits (`0` = blocked), and configure allowed content categories (`safe`, `adult`, `violent`, `disturbing`)
+- Backend-enforced content moderation:
+  - Always blocks severe/exploitative content for all roles (including admins)
+  - Blocks explicit/adult terms for regular `user` accounts while allowing administrator-approved categories for `authorized_creator`
+  - Provider-level `safe=true` parameter always enforced
+- Audit log (`GET /admin/audit-logs`) tracking all permission and settings changes
+
 ### Image Analysis (Multimodal)
-- Upload JPG / JPEG / PNG / WEBP images (max 10 MB)
+- Upload JPG / JPEG / PNG / WEBP images (max 5 MB)
 - Real Gemini multimodal inference (agricultural vision analyst prompt)
 - Drag-and-drop in both chat input and dedicated Image Analysis panel
 - Image requests always bypass the text cache (`bypass_cache=True`)
-- Results persisted to SQLite `image_analyses` table
 
-### Live Weather
-- Real-time weather via Open-Meteo (free, no API key required)
-- Geocoding → current conditions (temperature, humidity, rain, wind, condition)
-- 5-day forecast
-- Results persisted to SQLite `weather_queries` table
+### Live Weather & Crop Recommendations
+- Real-time weather + 5-day forecast via **Open-Meteo** (free, no API key required)
+- 10 crop profiles with 100-point weighted scoring (Temperature 30 pts, Soil 25 pts, Water 20 pts, Season 15 pts, pH 10 pts) and transparent assumptions
 
-### Crop Recommendations
-- 10 crop profiles with 100-point weighted scoring:
-  - Temperature 30 pts · Soil 25 pts · Water 20 pts · Season 15 pts · pH 10 pts
-- Optionally fetches live weather for the given location
-- Transparent assumption list when inputs are missing
-- Results persisted to SQLite `crop_recommendations` table
-
-### Five-Section UI
-1. **AI Chat** — original chat with image attachment button
-2. **Image Analysis** — dedicated panel with preset agricultural prompts
-3. **Live Weather** — location search, stats grid, 5-day forecast
-4. **Crop Recommendations** — soil/season/irrigation form + scored results
-5. **Chat History** — SQLite-persisted sessions, analyses, weather, crop records
+### Seven-Section UI
+1. **AI Chat** — multi-turn chat with image attachment button
+2. **Image Analysis** — dedicated multimodal vision panel
+3. **Image Studio** — prompt, style, ratio, variations, gallery, downloads, history (authenticated)
+4. **Live Weather** — location search, stats grid, 5-day forecast
+5. **Crop Guide** — soil/season/irrigation form + scored results
+6. **History** — SQLite-persisted sessions, analyses, weather, crop records
+7. **Admin** — user permissions, global settings, all generations, audit logs (administrators only)
 
 ---
 
@@ -60,25 +74,31 @@ LYFTR-AI-Chatbot/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py           # FastAPI routes + lifespan
-│       ├── database.py       # SQLite init + CRUD (5 tables)
-│       ├── schemas.py        # Pydantic models
-│       ├── chat_service.py   # LiteLLM multi-key failover, caching, multimodal
-│       ├── weather_service.py# Open-Meteo geocoding + forecast
-│       └── crop_service.py   # 10-crop weighted scoring engine
+│       ├── main.py            # FastAPI routes, auth dependencies, lifespan
+│       ├── auth_service.py    # PBKDF2 password hashing & HS256 JWT tokens
+│       ├── image_service.py   # Pollinations.ai Flux generation & content moderation
+│       ├── database.py        # SQLite init + CRUD (9 tables)
+│       ├── schemas.py         # Pydantic models & validation
+│       ├── chat_service.py    # LiteLLM multi-key failover, caching, multimodal
+│       ├── weather_service.py # Open-Meteo geocoding + forecast
+│       └── crop_service.py    # 10-crop weighted scoring engine
 │   └── tests/
-│       ├── test_health.py    # 35 original tests
-│       └── test_features.py  # 8 new feature tests
+│       ├── test_health.py     # 35 original chat/health/failover tests
+│       ├── test_features.py   # 8 weather/crop/analysis tests
+│       └── test_image_gen.py  # 42 auth/image-gen/admin/moderation tests
 └── frontend/
     ├── vercel.json
-    ├── .env.production       # VITE_API_BASE_URL=https://lyftr-ai-chatbot-1-k3zj.onrender.com
+    ├── .env.production        # VITE_API_BASE_URL=https://lyftr-ai-chatbot-1-k3zj.onrender.com
     └── src/
-        ├── App.jsx           # 5-tab multi-panel app
-        ├── api.js            # API client (chat, image, weather, crop, history)
+        ├── App.jsx            # 7-tab multi-panel app + auth state
+        ├── api.js             # API client (auth, chat, image gen, admin, weather, crop)
         ├── components/
-        │   ├── Sidebar.jsx           # 5-section nav + session list
+        │   ├── AuthModal.jsx
+        │   ├── ImageGenerationPanel.jsx
+        │   ├── AdminPanel.jsx
+        │   ├── Sidebar.jsx
         │   ├── ChatArea.jsx
-        │   ├── MessageInput.jsx      # Text + image attach + drag-drop
+        │   ├── MessageInput.jsx
         │   ├── ImageAnalysisPanel.jsx
         │   ├── WeatherPanel.jsx
         │   ├── CropPanel.jsx
@@ -90,12 +110,7 @@ LYFTR-AI-Chatbot/
 
 ---
 
-## 3. Local Setup
-
-### Prerequisites
-- Python 3.11+ with pip
-- Node.js 18+
-- Two Gemini API keys
+## 3. Local Setup & Administrator Configuration
 
 ### Environment Variables
 
@@ -111,19 +126,25 @@ cp .env.example .env
 | `LITELLM_MODEL` | LiteLLM model identifier | `gemini/gemini-3.5-flash-lite` |
 | `DATABASE_PATH` | SQLite file path | `./lyftr.db` |
 | `CORS_ORIGINS` | Allowed frontend origins | `http://localhost:5173` |
+| `JWT_SECRET_KEY` | Secret key for HS256 JWT signing | *(required in prod)* |
+| `ADMIN_EMAIL` | Initial administrator email (bootstrapped on startup) | *(optional)* |
+| `ADMIN_PASSWORD` | Initial administrator password (bootstrapped on startup) | *(optional)* |
 | `ENABLE_FAILURE_SIMULATION` | Enable `X-Simulate-Failure` header | `false` |
 
-### Backend
+### Administrator Bootstrap
+1. Set `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `JWT_SECRET_KEY` in your `.env` (or Render dashboard).
+2. Start the backend — `_bootstrap_admin()` automatically creates (or upgrades) the administrator account in SQLite on startup.
+3. Public `POST /auth/register` always creates a standard `user` account and cannot create an admin.
+
+### Running Locally
 
 ```bash
+# Backend
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
-```
 
-### Frontend
-
-```bash
+# Frontend
 cd frontend
 npm install
 npm run dev
@@ -135,81 +156,66 @@ Open http://localhost:5173.
 
 ## 4. API Reference
 
-### Original Endpoints
+### Authentication & User Profile
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/auth/register` | Public | Register a new `user` account, returns JWT |
+| POST | `/auth/login` | Public | Login with email/password, returns JWT |
+| GET | `/auth/me` | Bearer | Get current user profile & permissions |
 
+### Image Generation
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/images/generate` | Bearer | Generate 1–4 images (checks global switch, daily limit, content policy) |
+| GET | `/images/history` | Bearer | Get current user's generation history |
+| GET | `/images/{image_id}` | Bearer | Get specific generation record (owner or admin only) |
+
+### Administrator (Admin Role Required)
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/admin/users` | Admin | List all users and their permissions |
+| PATCH | `/admin/users/{user_id}/permissions` | Admin | Update role, active status, daily limit, allowed categories |
+| PATCH | `/admin/settings/image-generation` | Admin | Toggle global image generation or default daily limit |
+| GET | `/admin/settings` | Admin | View all global settings |
+| GET | `/admin/audit-logs` | Admin | View permission/setting change audit log |
+| GET | `/admin/image-generations` | Admin | View all users' image generation history |
+
+### Chat, Analysis, Weather & Crops
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Health, DB status, key count, cache |
 | POST | `/chat` | Send message, receive AI response + metadata |
-| GET | `/sessions` | List all sessions |
-| POST | `/sessions` | Create new session |
+| GET / POST | `/sessions` | List or create chat sessions |
 | GET | `/sessions/{session_id}/messages` | Session message history |
-
-### New Endpoints
-
-| Method | Path | Description |
-|---|---|---|
 | POST | `/analyze-image` | Multipart upload → Gemini multimodal analysis |
 | GET | `/weather?location=...` | Live weather (Open-Meteo) |
 | POST | `/crop-recommend` | Scored crop recommendations |
-| GET | `/history/activity` | All persisted analyses, weather, crop records |
-
-#### POST `/analyze-image`
-```
-Content-Type: multipart/form-data
-Fields:
-  file     (required) — image file, JPG/PNG/WEBP, max 10 MB
-  prompt   (optional) — custom analysis prompt
-  session_id (optional) — associate result with a session
-```
-
-#### POST `/crop-recommend`
-```json
-{
-  "location": "Pune",        // optional — fetches live weather if provided
-  "soil_type": "loamy",      // clay | sandy | loamy | silty | peaty | chalky
-  "soil_ph": 6.5,            // optional
-  "season": "Rabi",          // Kharif | Rabi | Zaid | Year-round
-  "temperature_c": 20.0,     // optional — overrides live weather
-  "rainfall_mm": 400.0,      // optional — overrides live weather
-  "irrigation": "moderate",  // none | low | moderate | high
-  "session_id": "..."        // optional
-}
-```
-
-### Failure Simulation
-
-Send `X-Simulate-Failure` header on `POST /chat` (requires `ENABLE_FAILURE_SIMULATION=true`):
-
-| Value | Behaviour |
-|---|---|
-| `key_1=429` | Simulates 429 on key-1, fails over to key-2 |
-| `key_1=429,key_2=500` | Both keys fail → HTTP 503 |
-| `*=429` | All keys fail → HTTP 503 |
-| `all_keys_fail` | All keys fail → HTTP 503 |
+| GET | `/history/activity` | Persisted analyses, weather, crop records |
 
 ---
 
 ## 5. Database Schema
 
-SQLite (`lyftr.db`) with 5 tables — all using `CREATE TABLE IF NOT EXISTS`:
+SQLite (`lyftr.db`) with 9 tables initialized idempotently via `CREATE TABLE IF NOT EXISTS`:
 
 | Table | Purpose |
 |---|---|
 | `sessions` | Chat sessions |
 | `messages` | Chat messages with LiteLLM metadata |
-| `image_analyses` | Gemini multimodal results |
+| `image_analyses` | Gemini multimodal analysis results |
 | `weather_queries` | Open-Meteo query results |
 | `crop_recommendations` | Scored crop recommendation results |
-
-> **Note on Render Free plan**: SQLite at `./lyftr.db` is ephemeral on the free tier (no persistent disk). Data persists within a deployment but resets on redeploy. For persistent storage, configure a Render persistent disk at `/data` and set `DATABASE_PATH=/data/lyftr.db`.
+| `users` | User accounts, password hashes, roles, active status, daily limits, allowed categories |
+| `image_generations` | Image generation requests, metadata, CDN URLs, status |
+| `app_settings` | Global settings (`image_generation_enabled`, default limits) |
+| `audit_logs` | Administrator permission and setting change audit trail |
 
 ---
 
 ## 6. Testing
 
 ```bash
-# Backend (43 tests: 35 original + 8 new feature tests)
+# Backend (85 tests: 35 chat/health + 8 weather/crop/analysis + 42 auth/image-gen/admin)
 python -m pytest backend/tests -v
 
 # Frontend production build
@@ -219,34 +225,16 @@ cd frontend && npm run build
 cd frontend && npx playwright test
 ```
 
-**Test results:**
-- pytest: **43/43 passed** ✅
-- Frontend build: **passed** ✅ (38 modules, 172.57 kB)
-- Playwright: **4/4 passed** ✅
-
-**Live integration tests:**
-- Open-Meteo weather API (Pune + London): **PASS** ✅
-- Gemini multimodal inference: verified via mocked pytest ✅
-- LiteLLM caching (`LIVE_INFERENCE` / `LLM_CACHE`): **PASS** ✅
-- Multi-key failover (429 → key-2): **PASS** ✅
-
 ---
 
 ## 7. Deployment
 
-### Backend on Render
+### Backend on Render (`render.yaml`)
+- Root Directory: `backend`
+- Build: `pip install -r requirements.txt`
+- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Required Render env vars: `LLM_API_KEYS`, `CORS_ORIGINS`, `JWT_SECRET_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`
 
-The `render.yaml` configures a Python Web Service with root directory `backend`.
-
-Required Render environment variables:
-- `LLM_API_KEYS` — your Gemini API keys (comma-separated)
-- `CORS_ORIGINS` — set to your Vercel frontend URL
-- `ENABLE_FAILURE_SIMULATION` — set to `true` for testing
-
-### Frontend on Vercel
-
-1. Import repository in Vercel with Root Directory `frontend`.
-2. Set `VITE_API_BASE_URL` to your Render backend URL.
-3. Deploy — Vercel uses `npm run build` and `frontend/vercel.json` for SPA rewrites.
-
-The committed `frontend/.env.production` already sets `VITE_API_BASE_URL` to the deployed Render URL.
+### Frontend on Vercel (`frontend/vercel.json`)
+- Root Directory: `frontend`
+- `frontend/.env.production` sets `VITE_API_BASE_URL=https://lyftr-ai-chatbot-1-k3zj.onrender.com`

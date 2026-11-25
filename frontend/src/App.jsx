@@ -8,6 +8,9 @@ import ImageAnalysisPanel from './components/ImageAnalysisPanel';
 import WeatherPanel from './components/WeatherPanel';
 import CropPanel from './components/CropPanel';
 import HistoryPanel from './components/HistoryPanel';
+import ImageGenerationPanel from './components/ImageGenerationPanel';
+import AdminPanel from './components/AdminPanel';
+import AuthModal from './components/AuthModal';
 import {
   sendMessage,
   analyzeImage,
@@ -15,16 +18,26 @@ import {
   fetchSessions,
   createSession,
   checkHealth,
+  getCurrentUser,
+  clearAuth,
+  fetchMe,
 } from './api';
 import './styles/App.css';
 
-const TOP_TABS = [
-  { id: 'chat', label: 'AI Chat' },
-  { id: 'image', label: 'Image Analysis' },
-  { id: 'weather', label: 'Live Weather' },
-  { id: 'crop', label: 'Crop Recommendations' },
-  { id: 'history', label: 'Chat History' },
-];
+const buildTabs = (user) => {
+  const tabs = [
+    { id: 'chat', label: '💬 AI Chat' },
+    { id: 'image', label: '🔍 Image Analysis' },
+    { id: 'imagegen', label: '🎨 Image Studio' },
+    { id: 'weather', label: '🌤️ Live Weather' },
+    { id: 'crop', label: '🌾 Crop Guide' },
+    { id: 'history', label: '📚 History' },
+  ];
+  if (user?.role === 'admin') {
+    tabs.push({ id: 'admin', label: '🛡️ Admin' });
+  }
+  return tabs;
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('chat');
@@ -35,9 +48,21 @@ export default function App() {
   const [error, setError] = useState(null);
   const [backendOnline, setBackendOnline] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [user, setUser] = useState(null);         // authenticated user
+  const [showAuth, setShowAuth] = useState(false); // show auth modal
   const healthInterval = useRef(null);
 
-  // ---- Health polling --------------------------------------------------
+  // ---- Auth init ----------------------------------------------------------
+  useEffect(() => {
+    const stored = getCurrentUser();
+    if (stored) {
+      setUser(stored);
+      // Refresh profile from server
+      fetchMe().then(setUser).catch(() => {});
+    }
+  }, []);
+
+  // ---- Health polling -----------------------------------------------------
   const pollHealth = useCallback(async () => {
     try {
       await checkHealth();
@@ -53,7 +78,7 @@ export default function App() {
     return () => clearInterval(healthInterval.current);
   }, [pollHealth]);
 
-  // ---- Load sessions & generate new session on page load ---------------
+  // ---- Load sessions & generate new session on page load -----------------
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -68,193 +93,192 @@ export default function App() {
         // Backend offline; will create session on first message
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
   // ---- Load messages when session changes --------------------------------
   useEffect(() => {
-    if (!activeSession) {
-      setMessages([]);
-      return;
-    }
+    if (!activeSession) { setMessages([]); return; }
     fetchMessages(activeSession)
       .then(setMessages)
-      .catch((e) => setError(e.message));
+      .catch(() => setMessages([]));
   }, [activeSession]);
 
-  // ---- New chat ---------------------------------------------------------
-  const handleNewChat = async () => {
+  // ---- Handlers ----------------------------------------------------------
+  const handleSend = useCallback(async (text, imageFile) => {
+    if (!text.trim() && !imageFile) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      if (imageFile) {
+        const userMsg = {
+          id: `tmp-u-${Date.now()}`, role: 'user',
+          content: `[Image: ${imageFile.name}] ${text || 'Analyze this image'}`,
+          session_id: activeSession, created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, userMsg]);
+        const result = await analyzeImage(imageFile, text, activeSession);
+        const assistantMsg = {
+          id: `tmp-a-${Date.now()}`, role: 'assistant',
+          content: result.analysis, session_id: activeSession,
+          created_at: new Date().toISOString(),
+          meta: result.metadata,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+      } else {
+        const userMsg = {
+          id: `tmp-u-${Date.now()}`, role: 'user',
+          content: text, session_id: activeSession,
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, userMsg]);
+        const result = await sendMessage(text, activeSession);
+        const assistantMsg = {
+          id: `tmp-a-${Date.now()}`, role: 'assistant',
+          content: result.reply, session_id: activeSession,
+          created_at: new Date().toISOString(),
+          meta: result.metadata,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+
+        // Update session title on first exchange
+        if (messages.length === 0) {
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === activeSession
+                ? { ...s, title: text.slice(0, 50) }
+                : s
+            )
+          );
+        }
+      }
+    } catch (err) {
+      setError(err.message || 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }, [activeSession, messages.length]);
+
+  const handleNewChat = useCallback(async () => {
+    setActiveTab('chat');
     try {
       const created = await createSession();
       setSessions((prev) => [created, ...prev]);
       setActiveSession(created.id);
       setMessages([]);
-    } catch {
-      setActiveSession(null);
-      setMessages([]);
+    } catch (err) {
+      setError(err.message);
     }
-  };
+  }, []);
 
-  // ---- Select session ---------------------------------------------------
-  const handleSelectSession = (id) => {
-    setActiveSession(id);
-  };
+  const handleSelectSession = useCallback(async (sessionId) => {
+    setActiveTab('chat');
+    setActiveSession(sessionId);
+  }, []);
 
-  // ---- Send message (text or image + text) ------------------------------
-  const handleSend = async (text, imageFile = null) => {
-    if ((!text.trim() && !imageFile) || loading) return;
+  const handleAuth = useCallback((data) => {
+    setUser({ id: data.user_id, email: data.email, role: data.role });
+    setShowAuth(false);
+  }, []);
 
-    const isFirstMessage = messages.length === 0;
-    const displayContent = imageFile
-      ? `[Image: ${imageFile.name}] ${text || 'Analyze attached image'}`
-      : text;
+  const handleLogout = useCallback(() => {
+    clearAuth();
+    setUser(null);
+    setActiveTab('chat');
+  }, []);
 
-    const userMsg = {
-      id: `temp-${Date.now()}`,
-      role: 'user',
-      content: displayContent,
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setLoading(true);
-    setError(null);
+  const dismissError = useCallback(() => setError(null), []);
 
-    try {
-      let targetSessionId = activeSession;
-      if (imageFile && !targetSessionId) {
-        const created = await createSession();
-        targetSessionId = created.id;
-        setActiveSession(created.id);
-      }
-
-      if (imageFile) {
-        const data = await analyzeImage(imageFile, text, targetSessionId);
-        const aiMsg = {
-          id: `assistant-${Date.now()}`,
-          session_id: targetSessionId,
-          role: 'assistant',
-          content: data.analysis,
-          meta: data.metadata,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-        fetchSessions().then(setSessions).catch(() => {});
-      } else {
-        const data = await sendMessage(text, activeSession);
-        const { session_id, reply, metadata } = data;
-        const aiMsg = {
-          id: `assistant-${Date.now()}`,
-          session_id,
-          role: 'assistant',
-          content: reply,
-          meta: metadata,
-          created_at: new Date().toISOString(),
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-
-        if (!activeSession) {
-          setActiveSession(session_id);
-        }
-        if (!activeSession || isFirstMessage) {
-          fetchSessions().then(setSessions).catch(() => {});
-        }
-      }
-    } catch (e) {
-      setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const TOP_TABS = buildTabs(user);
 
   return (
-    <div className="app">
+    <div className="app-layout">
+      {showAuth && <AuthModal onAuth={handleAuth} />}
+
       <Sidebar
         sessions={sessions}
         activeSession={activeSession}
+        onSelectSession={handleSelectSession}
+        onNewChat={handleNewChat}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        onNewChat={handleNewChat}
-        onSelectSession={handleSelectSession}
-        isOpen={sidebarOpen}
-        onToggle={() => setSidebarOpen((v) => !v)}
+        user={user}
+        onShowAuth={() => setShowAuth(true)}
+        onLogout={handleLogout}
       />
 
-      <main className={`main-panel ${sidebarOpen ? '' : 'sidebar-collapsed'}`}>
-        <header className="topbar">
+      <div className={`main-area ${sidebarOpen ? '' : 'sidebar-closed'}`}>
+        {/* Top bar */}
+        <div className="topbar">
           <button
-            className="topbar-toggle"
+            className="sidebar-toggle"
             onClick={() => setSidebarOpen((v) => !v)}
             aria-label="Toggle sidebar"
           >
-            ☰
+            {sidebarOpen ? '◀' : '☰'}
           </button>
-          <h1 className="topbar-title">LYFTR AI</h1>
-          <div className="topbar-tabs" role="tablist" aria-label="Workspace sections">
+          <div className="topbar-tabs">
             {TOP_TABS.map((t) => (
               <button
                 key={t.id}
-                role="tab"
-                aria-selected={activeTab === t.id}
                 className={`topbar-tab ${activeTab === t.id ? 'active' : ''}`}
-                data-testid={`tab-${t.id}`}
                 onClick={() => setActiveTab(t.id)}
               >
                 {t.label}
               </button>
             ))}
           </div>
-          <StatusBar online={backendOnline} />
-        </header>
+          <div className="topbar-right">
+            {user ? (
+              <div className="user-menu">
+                <span className={`role-pill role-${user.role}`}>{user.role}</span>
+                <span className="user-email-short">{user.email}</span>
+                <button className="btn-logout" onClick={handleLogout}>Sign Out</button>
+              </div>
+            ) : (
+              <button className="btn-signin" onClick={() => setShowAuth(true)}>
+                🔑 Sign In
+              </button>
+            )}
+          </div>
+        </div>
 
-        {error && (
-          <ErrorNotification message={error} onClose={() => setError(null)} />
-        )}
+        <StatusBar online={backendOnline} />
+        {error && <ErrorNotification message={error} onDismiss={dismissError} />}
 
-        {activeTab === 'chat' && (
-          <>
-            <ChatArea messages={messages} loading={loading} />
-            <MessageInput
-              onSend={handleSend}
-              disabled={loading}
-              onError={(msg) => setError(msg)}
-            />
-          </>
-        )}
-
-        {activeTab === 'image' && (
-          <ImageAnalysisPanel
-            activeSession={activeSession}
-            onError={(msg) => setError(msg)}
-          />
-        )}
-
-        {activeTab === 'weather' && (
-          <WeatherPanel
-            activeSession={activeSession}
-            onError={(msg) => setError(msg)}
-          />
-        )}
-
-        {activeTab === 'crop' && (
-          <CropPanel
-            activeSession={activeSession}
-            onError={(msg) => setError(msg)}
-          />
-        )}
-
-        {activeTab === 'history' && (
-          <HistoryPanel
-            sessions={sessions}
-            activeSession={activeSession}
-            onSelectSession={handleSelectSession}
-            onOpenChat={() => setActiveTab('chat')}
-            onError={(msg) => setError(msg)}
-          />
-        )}
-      </main>
+        {/* Panels */}
+        <div className="panel-container">
+          {activeTab === 'chat' && (
+            <div className="chat-wrapper">
+              <ChatArea messages={messages} loading={loading} />
+              <MessageInput onSend={handleSend} disabled={loading} />
+            </div>
+          )}
+          {activeTab === 'image' && <ImageAnalysisPanel />}
+          {activeTab === 'imagegen' && (
+            user
+              ? <ImageGenerationPanel user={user} />
+              : (
+                <div className="auth-required-panel">
+                  <div className="auth-required-card">
+                    <h2>🎨 Image Generation Studio</h2>
+                    <p>Please sign in to generate AI images.</p>
+                    <button className="btn-primary" onClick={() => setShowAuth(true)}>
+                      🔑 Sign In to Access
+                    </button>
+                  </div>
+                </div>
+              )
+          )}
+          {activeTab === 'weather' && <WeatherPanel />}
+          {activeTab === 'crop' && <CropPanel />}
+          {activeTab === 'history' && <HistoryPanel />}
+          {activeTab === 'admin' && user?.role === 'admin' && <AdminPanel user={user} />}
+        </div>
+      </div>
     </div>
   );
 }
