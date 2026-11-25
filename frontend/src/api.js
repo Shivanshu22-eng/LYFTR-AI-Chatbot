@@ -60,3 +60,66 @@ export async function createSession() {
   if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Analyze an uploaded image (JPG, JPEG, PNG, WEBP) via multimodal Gemini.
+ */
+export async function analyzeImage(file, prompt = '', sessionId = null) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('prompt', prompt || '');
+  if (sessionId) formData.append('session_id', sessionId);
+
+  const res = await fetch(`${API_BASE}/analyze-image`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Image analysis failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch live weather and 5-day forecast from Open-Meteo via backend.
+ */
+export async function fetchWeather(location, sessionId = null) {
+  const params = new URLSearchParams({ location });
+  if (sessionId) params.set('session_id', sessionId);
+  const res = await fetch(`${API_BASE}/weather?${params.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Weather lookup failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Request crop suitability recommendations.
+ */
+export async function recommendCrops(payload) {
+  const res = await fetch(`${API_BASE}/crop-recommend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Crop recommendation failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch persisted activity history (image analyses, weather queries, crop recommendations).
+ */
+export async function fetchActivityHistory(sessionId = null) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set('session_id', sessionId);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/history/activity${qs ? `?${qs}` : ''}`);
+  if (!res.ok) throw new Error(`Failed to load activity history: ${res.status}`);
+  return res.json();
+}

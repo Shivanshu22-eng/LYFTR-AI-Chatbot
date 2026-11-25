@@ -5,6 +5,7 @@ Multi-key LiteLLM integration with automatic failover, caching, and observabilit
 
 import os
 import time
+import base64
 import logging
 from typing import Optional
 
@@ -209,6 +210,7 @@ async def get_ai_response(
     messages: list[dict],
     model: Optional[str] = None,
     simulate_failure: Optional[str] = None,
+    bypass_cache: bool = False,
 ) -> dict:
     """
     Send messages to LiteLLM with automatic key failover and response caching.
@@ -279,6 +281,9 @@ async def get_ai_response(
             if key_id in sim_map:
                 raise _build_simulated_exception(sim_map[key_id])
 
+            has_multimodal = any(isinstance(m.get("content"), list) for m in messages)
+            no_cache = sim_active or bypass_cache or has_multimodal
+
             kwargs = {
                 "model": chosen_model,
                 "messages": messages,
@@ -286,8 +291,8 @@ async def get_ai_response(
                 "temperature": 0.7,
                 "max_tokens": 2048,
             }
-            if sim_active:
-                # Simulated failures must always bypass cache
+            if no_cache:
+                # Simulated failures and multimodal/image requests must bypass text cache
                 kwargs["cache"] = {"no-cache": True}
 
             start = time.perf_counter()
@@ -302,7 +307,7 @@ async def get_ai_response(
             output_tokens = int(output_tokens) if output_tokens is not None else 0
 
             hidden = getattr(response, "_hidden_params", None) or {}
-            cache_hit = bool(hidden.get("cache_hit", False)) and not sim_active
+            cache_hit = bool(hidden.get("cache_hit", False)) and not no_cache
             resolution_source = "LLM_CACHE" if cache_hit else "LIVE_INFERENCE"
 
             logger.info(
@@ -335,4 +340,48 @@ async def get_ai_response(
     logger.error("All API keys exhausted. Last error: %s", error_msg)
     raise RuntimeError(
         f"All API keys failed after {max_attempts} attempt(s). Last error: {error_msg}"
+    )
+
+
+IMAGE_SYSTEM_PROMPT = (
+    "You are LYFTR AI's multimodal vision analyst. Describe the attached image accurately and "
+    "answer the user's question based strictly on what is visible. "
+    "If the image shows crops, plants, leaves, soil, or agricultural scenes: "
+    "1) Identify visible crop/plant characteristics, "
+    "2) Note any visible disease symptoms, pest damage, or nutrient stress (and distinguish clearly from healthy tissue), "
+    "3) Only provide an estimated yield range if sufficient visual and contextual information exists, and clearly state the uncertainty and missing field data (such as acreage, cultivar, soil nutrients, and weather history). "
+    "Never fabricate observations that are not visible in the image."
+)
+
+
+async def analyze_image_with_gemini(
+    image_bytes: bytes,
+    mime_type: str,
+    prompt: str,
+    model: Optional[str] = None,
+    simulate_failure: Optional[str] = None,
+) -> dict:
+    """Run genuine multimodal Gemini image analysis, bypassing text response cache."""
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{encoded}"
+    user_text = (prompt or "").strip() or (
+        "Analyze this image in detail. If it is agricultural or shows a plant/crop, "
+        "describe visible crop characteristics, any disease or stress symptoms, and "
+        "whether yield can be reasonably estimated with clear uncertainty."
+    )
+    messages = [
+        {"role": "system", "content": IMAGE_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        },
+    ]
+    return await get_ai_response(
+        messages,
+        model=model,
+        simulate_failure=simulate_failure,
+        bypass_cache=True,
     )

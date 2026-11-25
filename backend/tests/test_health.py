@@ -23,12 +23,13 @@ os.environ["DATABASE_PATH"] = TEST_DB
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def clean_test_db():
-    """Remove test DB before and after each test."""
+def clean_test_db(monkeypatch):
+    """Isolate every test to TEST_DB so a live lyftr.db never leaks in."""
+    import app.database as _db
+    monkeypatch.setattr(_db, "DATABASE_PATH", TEST_DB)
     if os.path.exists(TEST_DB):
         os.remove(TEST_DB)
-    from app.database import init_db
-    init_db()
+    _db.init_db()
     yield
     if os.path.exists(TEST_DB):
         os.remove(TEST_DB)

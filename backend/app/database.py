@@ -66,6 +66,54 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
             CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+
+            CREATE TABLE IF NOT EXISTS image_analyses (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                analysis TEXT NOT NULL,
+                model TEXT,
+                latency_ms REAL,
+                key_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS weather_queries (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                location TEXT NOT NULL,
+                resolved_name TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                temperature_c REAL,
+                humidity_pct REAL,
+                rainfall_mm REAL,
+                wind_speed_kmh REAL,
+                condition TEXT,
+                source TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS crop_recommendations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                location TEXT,
+                soil_type TEXT,
+                soil_ph REAL,
+                season TEXT,
+                temperature_c REAL,
+                rainfall_mm REAL,
+                irrigation TEXT,
+                recommendations_json TEXT NOT NULL,
+                assumptions_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+            );
         """)
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
         if "source" in cols and "resolution_source" not in cols:
@@ -160,4 +208,174 @@ def get_messages(session_id: str) -> list[dict]:
             "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC",
             (session_id,),
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_image_analysis(
+    filename: str,
+    mime_type: str,
+    prompt: str,
+    analysis: str,
+    session_id: str | None = None,
+    model: str | None = None,
+    latency_ms: float | None = None,
+    key_id: str | None = None,
+) -> dict:
+    """Persist an image analysis record."""
+    record_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO image_analyses
+               (id, session_id, filename, mime_type, prompt, analysis, model, latency_ms, key_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (record_id, session_id, filename, mime_type, prompt, analysis, model, latency_ms, key_id, now),
+        )
+    return {
+        "id": record_id,
+        "session_id": session_id,
+        "filename": filename,
+        "mime_type": mime_type,
+        "prompt": prompt,
+        "analysis": analysis,
+        "model": model,
+        "latency_ms": latency_ms,
+        "key_id": key_id,
+        "created_at": now,
+    }
+
+
+def get_image_analyses(session_id: str | None = None, limit: int = 20) -> list[dict]:
+    """Return recent image analyses, optionally filtered by session_id."""
+    with get_connection() as conn:
+        if session_id:
+            rows = conn.execute(
+                "SELECT * FROM image_analyses WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM image_analyses ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_weather_query(
+    location: str,
+    resolved_name: str,
+    latitude: float | None,
+    longitude: float | None,
+    temperature_c: float | None,
+    humidity_pct: float | None,
+    rainfall_mm: float | None,
+    wind_speed_kmh: float | None,
+    condition: str,
+    source: str,
+    fetched_at: str,
+    session_id: str | None = None,
+) -> dict:
+    """Persist a weather query record."""
+    record_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO weather_queries
+               (id, session_id, location, resolved_name, latitude, longitude, temperature_c,
+                humidity_pct, rainfall_mm, wind_speed_kmh, condition, source, fetched_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                record_id, session_id, location, resolved_name, latitude, longitude,
+                temperature_c, humidity_pct, rainfall_mm, wind_speed_kmh, condition,
+                source, fetched_at, now,
+            ),
+        )
+    return {
+        "id": record_id,
+        "session_id": session_id,
+        "location": location,
+        "resolved_name": resolved_name,
+        "latitude": latitude,
+        "longitude": longitude,
+        "temperature_c": temperature_c,
+        "humidity_pct": humidity_pct,
+        "rainfall_mm": rainfall_mm,
+        "wind_speed_kmh": wind_speed_kmh,
+        "condition": condition,
+        "source": source,
+        "fetched_at": fetched_at,
+        "created_at": now,
+    }
+
+
+def get_weather_queries(session_id: str | None = None, limit: int = 20) -> list[dict]:
+    """Return recent weather queries, optionally filtered by session_id."""
+    with get_connection() as conn:
+        if session_id:
+            rows = conn.execute(
+                "SELECT * FROM weather_queries WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM weather_queries ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_crop_recommendation(
+    location: str | None,
+    soil_type: str | None,
+    soil_ph: float | None,
+    season: str | None,
+    temperature_c: float | None,
+    rainfall_mm: float | None,
+    irrigation: str | None,
+    recommendations_json: str,
+    assumptions_json: str,
+    session_id: str | None = None,
+) -> dict:
+    """Persist a crop recommendation record."""
+    record_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO crop_recommendations
+               (id, session_id, location, soil_type, soil_ph, season, temperature_c,
+                rainfall_mm, irrigation, recommendations_json, assumptions_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                record_id, session_id, location, soil_type, soil_ph, season,
+                temperature_c, rainfall_mm, irrigation, recommendations_json,
+                assumptions_json, now,
+            ),
+        )
+    return {
+        "id": record_id,
+        "session_id": session_id,
+        "location": location,
+        "soil_type": soil_type,
+        "soil_ph": soil_ph,
+        "season": season,
+        "temperature_c": temperature_c,
+        "rainfall_mm": rainfall_mm,
+        "irrigation": irrigation,
+        "created_at": now,
+    }
+
+
+def get_crop_recommendations(session_id: str | None = None, limit: int = 20) -> list[dict]:
+    """Return recent crop recommendations, optionally filtered by session_id."""
+    with get_connection() as conn:
+        if session_id:
+            rows = conn.execute(
+                "SELECT * FROM crop_recommendations WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM crop_recommendations ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
     return [dict(r) for r in rows]

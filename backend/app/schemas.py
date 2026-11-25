@@ -75,3 +75,15 @@ class HealthResponse(BaseModel):
     cache_enabled: bool
     version: Optional[str] = None
     database: Optional[str] = None
+
+
+class CropRecommendRequest(BaseModel):
+    """Request body for the POST /crop-recommend endpoint."""
+    session_id: Optional[str] = Field(None, max_length=128)
+    location: Optional[str] = Field(None, max_length=150)
+    soil_type: Optional[str] = Field(None, max_length=64)
+    soil_ph: Optional[float] = Field(None, ge=0.0, le=14.0)
+    season: Optional[str] = Field(None, max_length=32)
+    temperature_c: Optional[float] = Field(None, ge=-40.0, le=60.0)
+    rainfall_mm: Optional[float] = Field(None, ge=0.0, le=5000.0)
+    irrigation: Optional[str] = Field(None, max_length=32)
